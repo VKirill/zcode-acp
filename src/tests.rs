@@ -78,6 +78,28 @@ fn runtime_bundle(t: &Temp, os: &str, mac_name: &str) -> (PathBuf, PathBuf) {
     (entry, exe)
 }
 #[test]
+fn personal_plan_model_ids_are_read_per_provider() {
+    let t = Temp::new();
+    t.write("provider_config.json", &json!({"schemaVersion":1,"config":{"providerConfigRules":{"providerRules":[
+        {"providerId":"account:zai-individual-coding-plan","config":{"personalModelIds":["glm-5.3-flashx",""]}},
+        {"providerId":"account:zai-start-plan","config":{"personalModelIds":["GLM-5.3-Flash"]}}]}}}));
+    let mut env = t.env();
+    env.insert(
+        "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE".into(),
+        path_string(t.0.join("provider_config.json")),
+    );
+    let ids = crate::account::personal_model_ids(&env, "account:zai-individual-coding-plan");
+    assert_eq!(ids, vec!["glm-5.3-flashx".to_owned()]);
+    assert!(crate::account::personal_model_ids(&env, "account:other").is_empty());
+    env.insert(
+        "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE".into(),
+        path_string(t.0.join("missing.json")),
+    );
+    assert!(
+        crate::account::personal_model_ids(&env, "account:zai-individual-coding-plan").is_empty()
+    );
+}
+#[test]
 fn embedded_runtime_belongs_to_selected_windows_bundle() {
     let t = Temp::new();
     let (entry, exe) = runtime_bundle(&t, "win32", "");
