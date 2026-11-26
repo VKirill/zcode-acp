@@ -108,6 +108,27 @@ fn mac_runtime_uses_bundle_executable_and_rejects_traversal() {
     assert!(!crate::runtime::Runtime::for_platform(&entry, &Env::new(), "darwin").electron);
 }
 #[test]
+fn mac_runtime_prefers_dockless_helper_but_keeps_main_for_keychain() {
+    let t = Temp::new();
+    let (entry, main) = runtime_bundle(&t, "darwin", "ZCode Test");
+    let contents = main.parent().unwrap().parent().unwrap().to_path_buf();
+    let helper = contents.join("Frameworks/ZCode Test Helper.app/Contents/MacOS/ZCode Test Helper");
+    std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+    std::fs::write(&helper, "fixture helper").unwrap();
+    let r = crate::runtime::Runtime::for_platform(&entry, &Env::new(), "darwin");
+    assert!(r.electron);
+    assert_eq!(r.executable, helper);
+    assert_eq!(r.main_executable, main);
+    let mut env = Env::new();
+    for supplied in [&main, &helper] {
+        env.insert("ZCODE_NODE".into(), path_string(supplied));
+        let r = crate::runtime::Runtime::for_platform(&entry, &env, "darwin");
+        assert!(r.electron);
+        assert_eq!(r.source, "override");
+        assert_eq!(r.main_executable, main);
+    }
+}
+#[test]
 fn explicit_runtime_is_authoritative_and_can_select_own_electron() {
     let t = Temp::new();
     let (entry, exe) = runtime_bundle(&t, "win32", "");
