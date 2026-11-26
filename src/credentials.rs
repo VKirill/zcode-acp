@@ -4,12 +4,30 @@ use crate::common::*;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
-use std::{io::Read, path::Path};
+use std::{io::Read, path::Path, sync::mpsc, time::Duration};
 
 fn unavailable() -> Error {
     Error::new(
         "Cannot read ZCode credential encryption key. Use the same OS user, unlock the OS credential store, and use the same credential secret as ZCode",
     )
+}
+// A first read from a freshly installed binary makes macOS show a Keychain
+// dialog and blocks the call until someone answers it; headless agents hang.
+const OS_KEY_TIMEOUT: Duration = Duration::from_secs(20);
+fn keychain_prompt_pending() -> Error {
+    Error::new(
+        "Timed out waiting for the OS credential store. macOS is probably asking for Keychain access to \"ZCode Credential Encryption\": on the agent machine click \"Always Allow\" for zcode-acp, then retry. The prompt appears again after each zcode-acp update because the binary changes",
+    )
+}
+fn with_timeout<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+    limit: Duration,
+) -> Option<T> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(limit).ok()
 }
 fn invalid() -> Error {
     Error::new("Invalid or unsupported encrypted ZCode credential")
@@ -180,9 +198,15 @@ impl<'a> Reader<'a> {
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 fn read_os_key(file: &Path) -> Result<[u8; 32]> {
     let account = hash(path_string(absolute(file)?));
-    let encoded = keyring::Entry::new("ZCode Credential Encryption", &account)
-        .and_then(|entry| entry.get_password())
-        .map_err(|_| unavailable())?;
+    let encoded = with_timeout(
+        move || {
+            keyring::Entry::new("ZCode Credential Encryption", &account)
+                .and_then(|entry| entry.get_password())
+        },
+        OS_KEY_TIMEOUT,
+    )
+    .ok_or_else(keychain_prompt_pending)?
+    .map_err(|_| unavailable())?;
     if encoded.len() != 43 {
         return Err(unavailable());
     }
@@ -214,6 +238,12 @@ mod tests {
             URL_SAFE_NO_PAD.encode(tag),
             URL_SAFE_NO_PAD.encode(bytes)
         )
+    }
+    #[test]
+    fn with_timeout_returns_value_or_gives_up_on_a_blocked_call() {
+        assert_eq!(with_timeout(|| 7, Duration::from_secs(5)), Some(7));
+        let slow = || std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(with_timeout(slow, Duration::from_millis(20)), None);
     }
     #[test]
     fn v2_os_and_managed_secrets_are_read_only_and_fail_closed() {
