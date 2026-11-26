@@ -9,6 +9,7 @@ pub struct Runtime {
     pub executable: PathBuf,
     /// The signed app's main binary. macOS Keychain items trust only this one,
     /// not the Helper that `executable` prefers to avoid Dock icons.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub main_executable: PathBuf,
     pub electron: bool,
     pub source: &'static str,
